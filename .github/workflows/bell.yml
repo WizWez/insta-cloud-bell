@@ -1,0 +1,77 @@
+# 인스타 클라우드 알람시계 '종' (2026-10-11) — 공개 저장소 <아이디>/insta-cloud-bell 에서 돕니다.
+# 이 파일의 원본은 공유 코드 "2. 카드뉴스 + 한장릴스/cloud/bell.yml" (고친 뒤 tools/클라우드_종.py 만들기).
+#
+# 왜 필요한가: GitHub 무료 계정은 '비공개' 저장소의 정해진 시각 실행(schedule)이 사실상 안 돎 (10/11 실제로 0번).
+#   공개 저장소는 정해진 시각 실행이 되고 사용 시간도 무료 → 이 종이 10분마다 비공개 클라우드 대기열을 보고
+#   올릴 차례(계획 시각이 지난 것)가 있을 때만 비공개 저장소의 발행기를 깨움 (workflow_dispatch).
+# 공개라서 이 파일과 실행 기록은 누구나 볼 수 있음 → 게시물 이름·캡션·열쇠는 절대 찍지 않음 (숫자만).
+#   열쇠 BELL_TOKEN = 비공개 클라우드 저장소 하나만 '읽기 + 실행 깨우기' 되는 GitHub 세분화 토큰 (저장소 비밀값, 안 보임).
+#   깨울 저장소 = 저장소 변수 TARGET_REPO (예: WizWez/insta-cloud-money_life_bal)
+name: 클라우드 종
+
+on:
+  schedule:
+    - cron: "3-59/10 23 * * *"     # 한국 08:03 ~ 08:53 (10분마다)
+    - cron: "3-59/10 0-12 * * *"   # 한국 09:03 ~ 21:53
+  workflow_dispatch: {}
+
+permissions:
+  actions: write                   # 60일 동안 활동이 없으면 GitHub 가 공개 저장소의 정해진 실행을 끔 → 매번 다시 켜 둠
+
+concurrency:
+  group: insta-cloud-bell
+  cancel-in-progress: false
+
+jobs:
+  ring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: 올릴 차례가 있으면 클라우드 깨우기
+        env:
+          BELL_TOKEN: ${{ secrets.BELL_TOKEN }}
+          TARGET_REPO: ${{ vars.TARGET_REPO || 'WizWez/insta-cloud-money_life_bal' }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, sys, urllib.request
+          from datetime import datetime, timedelta, timezone
+          tok, repo = os.environ.get("BELL_TOKEN", ""), os.environ.get("TARGET_REPO", "")
+          if not tok or not repo:
+              print("열쇠나 깨울 저장소가 없음 — 아무것도 안 함"); sys.exit(0)
+          def call(path, data=None):
+              req = urllib.request.Request("https://api.github.com/repos/" + repo + path,
+                                           data=json.dumps(data).encode() if data is not None else None,
+                                           method="POST" if data is not None else "GET",
+                                           headers={"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  body = r.read()
+                  return json.loads(body) if body else {}
+          def read(name):
+              try:
+                  return json.loads(base64.b64decode(call("/contents/" + name)["content"]))
+              except Exception:
+                  return {}
+          kst = datetime.now(timezone(timedelta(hours=9))).replace(tzinfo=None)
+          q, res = read("queue.json"), read("results.json")
+          done = {i for i, r in (res.get("항목") or {}).items() if r.get("상태") == "올림"}
+          left = [it for it in q.get("항목") or [] if it.get("id") not in done]
+          now = kst.strftime("%Y-%m-%d %H:%M")
+          due = [it for it in left if str(it.get("계획") or "") <= now]     # 계획이 없는 항목(옛 PC 코드)도 '차례'로 봄
+          print(f"한국 {now} · 남은 것 {len(left)}개 · 차례 {len(due)}개")
+          if not due:
+              sys.exit(0)
+          runs = call("/actions/workflows/publish.yml/runs?per_page=5").get("workflow_runs") or []
+          if any(r.get("status") in ("queued", "in_progress", "waiting", "pending") for r in runs):
+              print("이미 도는 중 — 안 깨움"); sys.exit(0)
+          if runs:
+              last = datetime.strptime(runs[0]["created_at"], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=9)
+              if kst - last < timedelta(minutes=12):
+                  print("12분 안에 이미 돌았음 — 안 깨움"); sys.exit(0)
+          call("/actions/workflows/publish.yml/dispatches", {"ref": "main"})
+          print("클라우드 깨움")
+          PY
+      - name: 정해진 실행이 꺼지지 않게 다시 켜 둠
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/bell.yml/enable" >/dev/null 2>&1 || true
