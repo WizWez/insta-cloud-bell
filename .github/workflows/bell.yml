@@ -11,8 +11,8 @@ name: 클라우드 종
 
 on:
   schedule:
-    - cron: "3-59/10 23 * * *"     # 한국 08:03 ~ 08:53 (10분마다)
-    - cron: "3-59/10 0-12 * * *"   # 한국 09:03 ~ 21:53
+    - cron: "3,13,23,33,43,53 23 * * *"     # 한국 08:03 ~ 08:53 (10분마다)
+    - cron: "3,13,23,33,43,53 0-12 * * *"   # 한국 09:03 ~ 21:53  (10/11: 3-59/10 꼴은 한 번도 안 돌아서 낱개로)
   workflow_dispatch: {}
 
 permissions:
@@ -57,6 +57,10 @@ jobs:
           left = [it for it in q.get("항목") or [] if it.get("id") not in done]
           now = kst.strftime("%Y-%m-%d %H:%M")
           due = [it for it in left if str(it.get("계획") or "") <= now]     # 계획이 없는 항목(옛 PC 코드)도 '차례'로 봄
+          ping = read("ping.json")                                        # 종 시험 (src/cloud.py 종시험): 이 시간 안이면 깨움
+          if str(ping.get("시작") or "9") <= now <= str(ping.get("끝") or ""):
+              due.append({"id": "종시험"})
+              print("종 시험 신호 있음")
           print(f"한국 {now} · 남은 것 {len(left)}개 · 차례 {len(due)}개")
           if not due:
               sys.exit(0)
